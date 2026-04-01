@@ -6,6 +6,9 @@ from src.method1 import method1_denoise
 from src.method2 import method2_denoise
 from src.metrics import psnr, ssim, mae
 
+import os
+os.makedirs("outputs", exist_ok=True)
+os.makedirs("outputs/figs", exist_ok=True)
 
 def run_once(clean, counts, peak, method_name):
     t0 = time.perf_counter()
