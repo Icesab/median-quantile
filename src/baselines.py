@@ -1,5 +1,9 @@
 import numpy as np
-from .utils import local_mean, local_median
+
+try:
+    from .utils import local_mean, local_median
+except ImportError:  # pragma: no cover - fallback for direct local imports
+    from utils import local_mean, local_median
 
 
 def noisy_passthrough(counts: np.ndarray) -> np.ndarray:

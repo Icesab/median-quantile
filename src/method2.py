@@ -1,11 +1,24 @@
 import numpy as np
-from .utils import (
-    local_mean,
-    poisson_prob_strict_less,
-    weighted_quantile,
-    extract_patch,
-    glr_patch_distance,
-)
+from numpy.lib.stride_tricks import sliding_window_view
+
+try:
+    from .utils import local_mean, poisson_prob_strict_less, weighted_quantile
+except ImportError:  # pragma: no cover - fallback for direct local imports
+    from utils import local_mean, poisson_prob_strict_less, weighted_quantile
+
+
+def _xlogx(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=float)
+    log_values = np.zeros_like(values, dtype=float)
+    np.log(values, out=log_values, where=values > 0)
+    return values * log_values
+
+
+def _build_patch_bank(counts: np.ndarray, patch_size: int) -> np.ndarray:
+    patch_rad = patch_size // 2
+    padded = np.pad(counts, pad_width=patch_rad, mode="reflect")
+    windows = sliding_window_view(padded, (patch_size, patch_size))
+    return windows.reshape(counts.shape[0], counts.shape[1], patch_size * patch_size)
 
 
 def method2_denoise(
@@ -25,33 +38,56 @@ def method2_denoise(
     denoised_counts = np.zeros_like(counts, dtype=float)
     p_map = np.zeros_like(counts, dtype=float)
     m_nl_map = np.zeros_like(counts, dtype=float)
+    patches = _build_patch_bank(counts, patch_size)
+    patch_xlogx_sum = _xlogx(patches).sum(axis=-1)
 
     for r in range(h):
         for c in range(w):
-            ref_patch = extract_patch(counts, (r, c), patch_size)
-            candidates = []
-
             r0, r1 = max(0, r - search_rad), min(h, r + search_rad + 1)
             c0, c1 = max(0, c - search_rad), min(w, c + search_rad + 1)
 
-            for rr in range(r0, r1):
-                for cc in range(c0, c1):
-                    if rr == r and cc == c:
-                        continue
-                    cand_patch = extract_patch(counts, (rr, cc), patch_size)
-                    d = glr_patch_distance(ref_patch, cand_patch)
-                    candidates.append((d, rr, cc))
+            ref_patch = patches[r, c]
+            ref_sum = patch_xlogx_sum[r, c]
 
-            if not candidates:
+            window_patches = patches[r0:r1, c0:c1].reshape(-1, ref_patch.size)
+            window_patch_sums = patch_xlogx_sum[r0:r1, c0:c1].reshape(-1)
+            window_values = counts[r0:r1, c0:c1].reshape(-1)
+
+            row_coords = np.repeat(np.arange(r0, r1), c1 - c0)
+            col_coords = np.tile(np.arange(c0, c1), r1 - r0)
+            center_mask = (row_coords != r) | (col_coords != c)
+
+            candidate_patches = window_patches[center_mask]
+            candidate_patch_sums = window_patch_sums[center_mask]
+            candidate_values = window_values[center_mask]
+            candidate_rows = row_coords[center_mask]
+            candidate_cols = col_coords[center_mask]
+
+            if candidate_patches.size == 0:
                 denoised_counts[r, c] = counts[r, c]
                 p_map[r, c] = 0.5
                 m_nl_map[r, c] = counts[r, c]
                 continue
 
-            candidates.sort(key=lambda x: x[0])
-            selected = candidates[: min(top_k, len(candidates))]
-            dists = np.array([d for d, _, _ in selected], dtype=float)
-            values = np.array([counts[rr, cc] for _, rr, cc in selected], dtype=float)
+            m = 0.5 * (candidate_patches + ref_patch)
+            log_m = np.zeros_like(m, dtype=float)
+            np.log(m, out=log_m, where=m > 0)
+            dists = ref_sum + candidate_patch_sums - np.sum((candidate_patches + ref_patch) * log_m, axis=1)
+
+            k = min(top_k, dists.size)
+            if k < dists.size:
+                selected_idx = np.argpartition(dists, k - 1)[:k]
+            else:
+                selected_idx = np.arange(dists.size)
+
+            selected_dists = dists[selected_idx]
+            selected_rows = candidate_rows[selected_idx]
+            selected_cols = candidate_cols[selected_idx]
+            stable_order = np.lexsort((selected_cols, selected_rows, selected_dists))
+            selected_idx = selected_idx[stable_order]
+
+            dists = dists[selected_idx]
+            values = candidate_values[selected_idx]
 
             h_i = np.median(dists) + 1e-8
             weights = np.exp(-dists / h_i)

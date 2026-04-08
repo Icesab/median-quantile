@@ -27,6 +27,30 @@ def poisson_prob_strict_less(lam, threshold):
     return result
 
 
+def poisson_prob_self_leq(lam):
+    """
+    Compute P(S <= lam), S ~ Poisson(lam), i.e. F(floor(lam); lam).
+    """
+    lam_arr = np.maximum(np.asarray(lam, dtype=float), 0.0)
+    return poisson.cdf(np.floor(lam_arr).astype(int), lam_arr)
+
+
+def clip_mean_to_median_band(mean, median, lower, upper, median_floor=0.0):
+    """
+    Clip local mean to a multiplicative band around local median only when
+    median is above the configured floor.
+    """
+    mean_arr = np.asarray(mean, dtype=float)
+    median_arr = np.asarray(median, dtype=float)
+    clipped = mean_arr.copy()
+    use_band = median_arr > float(median_floor)
+    if np.any(use_band):
+        lower_bound = float(lower) * median_arr[use_band]
+        upper_bound = float(upper) * median_arr[use_band]
+        clipped[use_band] = np.clip(mean_arr[use_band], lower_bound, upper_bound)
+    return clipped
+
+
 def weighted_quantile(values, weights=None, q: float = 0.5) -> float:
     """
     Weighted empirical quantile.
@@ -91,5 +115,8 @@ def glr_patch_distance(patch_a: np.ndarray, patch_b: np.ndarray) -> float:
         out[nz] = x[nz] * np.log(x[nz])
         return out
 
-    dist = np.sum(xlogx(a) + xlogx(b) - (a + b) * np.where(m > 0, np.log(m), 0.0))
+    log_m = np.zeros_like(m, dtype=float)
+    positive = m > 0
+    log_m[positive] = np.log(m[positive])
+    dist = np.sum(xlogx(a) + xlogx(b) - (a + b) * log_m)
     return float(dist)

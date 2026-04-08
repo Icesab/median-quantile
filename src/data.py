@@ -28,3 +28,18 @@ def generate_poisson_counts(clean: np.ndarray, peak: float, seed: int):
     counts = rng.poisson(lam).astype(np.int32)
     noisy_intensity = counts.astype(float) / float(peak)
     return counts, noisy_intensity
+
+
+def generate_centered_additive_poisson(
+    clean: np.ndarray,
+    lambda0: float,
+    seed: int,
+    clip: bool = False,
+):
+    rng = np.random.default_rng(seed)
+    clean = np.asarray(clean, dtype=float)
+    baseline_counts = rng.poisson(float(lambda0), size=clean.shape).astype(np.int32)
+    noisy_intensity = clean + baseline_counts.astype(float) - float(lambda0)
+    if clip:
+        noisy_intensity = np.maximum(noisy_intensity, 0.0)
+    return baseline_counts, noisy_intensity
